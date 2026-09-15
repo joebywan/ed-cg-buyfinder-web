@@ -21,8 +21,9 @@ install: open the page.
    - **Chrome or Edge:** **Connect journal folder**. The browser asks once for
      permission, then the page keeps reading the folder as you play, and
      re-searches by itself when you dock at the goal.
-   - **Firefox:** **Load journal folder**. Firefox can only hand a page a copy
-     of the folder as it is at that moment, so nothing updates by itself:
+   - **Firefox, Brave or Safari:** **Load journal folder**. These browsers
+     only hand a page a copy of the folder as it is at that moment (Brave
+     switches off the feature Chrome uses), so nothing updates by itself:
      press **Load journal folder again** after docking to refresh. If the
      browser asks about uploading files, nothing leaves your computer — the
      page reads them locally.

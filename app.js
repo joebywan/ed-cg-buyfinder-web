@@ -1,6 +1,7 @@
 // The page: wires the pure modules in src/ to the DOM, localStorage and the
 // journal folder. Everything worth testing lives in src/.
 import { buildRows, defaultFetchJson } from "./src/ardent.js";
+import { folderTooltip } from "./src/browser.js";
 import { FRONTIER_URL, historyFromLines, parseLive, suggestDestination } from "./src/cg.js";
 import { JournalState } from "./src/journal.js";
 import { JournalTail, readJournalFiles } from "./src/tail.js";
@@ -505,6 +506,7 @@ function setupJournalButton() {
   if (CAN_TAIL) {
     btn.onclick = pickJournal;
   } else if (CAN_SNAPSHOT) {
+    btn.title = folderTooltip(navigator);
     const input = $("journal-files");
     btn.onclick = () => input.click();
     input.onchange = () => {
