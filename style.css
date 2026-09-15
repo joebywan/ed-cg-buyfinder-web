@@ -40,6 +40,7 @@ button, input, select {
 }
 button { cursor: pointer; color: var(--or); letter-spacing: .04em; }
 button:hover { border-color: var(--or-dim); }
+button:disabled { cursor: default; color: var(--dim); border-style: dashed; }
 button.primary { background: var(--or); color: var(--bg); border-color: var(--or); font-weight: bold; }
 button.primary:hover { background: #ff8a2a; }
 input:focus, select:focus, button:focus-visible { outline: 1px solid var(--or); outline-offset: 0; }

@@ -14,17 +14,22 @@ install: open the page.
 
 1. Open the page. It picks up the community goal that is running and searches
    straight away.
-2. **Connect journal folder** (Chrome or Edge) and choose your Elite journal
-   folder, usually
+2. Give it your Elite journal folder, usually
    `C:\Users\<you>\Saved Games\Frontier Developments\Elite Dangerous`.
-   The browser asks once for permission to read it. From then on the page
-   knows which goal you joined and which ship you are flying, and learns how
-   long your jumps and approaches really take.
+   The page then knows which goal you joined and which ship you are flying,
+   and learns how long your jumps and approaches really take.
+   - **Chrome or Edge:** **Connect journal folder**. The browser asks once for
+     permission, then the page keeps reading the folder as you play, and
+     re-searches by itself when you dock at the goal.
+   - **Firefox:** **Load journal folder**. Firefox can only hand a page a copy
+     of the folder as it is at that moment, so nothing updates by itself:
+     press **Load journal folder again** after docking to refresh. If the
+     browser asks about uploading files, nothing leaves your computer — the
+     page reads them locally.
 3. Click a row to copy its system name, then paste it into the galaxy map.
 
 Without the journal, type your hold size and jump ranges into the boxes at the
-top. Firefox and Safari can't read the journal folder, so that is how they
-work.
+top.
 
 **BEST MIXED LOADS** groups by station and fills your hold with that station's
 best commodities, topping up when the best one runs short. **ALL SOURCES** is

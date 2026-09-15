@@ -65,3 +65,23 @@ export class JournalTail {
     return r.count;
   }
 }
+
+/**
+ * Read the newest `files` journals from a one-off folder snapshot, oldest
+ * first: Firefox has no directory handles, only <input webkitdirectory>,
+ * which hands over File objects once and cannot be tailed.
+ */
+export async function readJournalFiles(fileList, sink, files = 12) {
+  const journals = [...fileList].filter((f) => JOURNAL.test(f.name))
+    .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0))
+    .slice(-files);
+  let n = 0;
+  for (const f of journals) {
+    const { lines } = takeLines(new Uint8Array(await f.arrayBuffer()));
+    for (const line of lines) {
+      try { sink(line, false); } catch { /* one bad line must not stop the read */ }
+    }
+    n += lines.length;
+  }
+  return n;
+}

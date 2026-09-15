@@ -1,7 +1,7 @@
 // Journal folder tailing against a fake FileSystemDirectoryHandle.
 import test from "node:test";
 import assert from "node:assert/strict";
-import { JournalTail, takeLines } from "../src/tail.js";
+import { JournalTail, readJournalFiles, takeLines } from "../src/tail.js";
 
 const enc = (s) => new TextEncoder().encode(s);
 
@@ -54,4 +54,26 @@ test("an empty folder primes nothing and polls quietly", async () => {
   assert.equal(await tail.prime(), 0);
   assert.equal(await tail.poll(), 0);
   assert.equal(tail.name, null);
+});
+
+// Firefox has no directory handles, only <input webkitdirectory>: a one-off
+// snapshot of the folder as File objects.
+test("a folder snapshot is read newest journals only, oldest first", async () => {
+  const files = [
+    new File(["mid1\nmid2\n"], "Journal.2026-09-14T100000.01.log"),
+    new File(["{}\n"], "Status.json"),
+    new File(["new1\npart"], "Journal.2026-09-15T100000.01.log"),
+    new File(["ancient\n"], "Journal.2026-09-12T100000.01.log"),
+    new File(["old1\n"], "Journal.2026-09-13T100000.01.log"),
+  ];
+  const got = [];
+  assert.equal(await readJournalFiles(files, (line, live) => got.push([line, live]), 3), 4);
+  // "part" was mid-write when the snapshot was taken, so it is left out
+  assert.deepEqual(got, [["old1", false], ["mid1", false], ["mid2", false], ["new1", false]]);
+});
+
+test("an empty or journal-less snapshot reads nothing", async () => {
+  const none = () => assert.fail("no lines expected");
+  assert.equal(await readJournalFiles([], none), 0);
+  assert.equal(await readJournalFiles([new File(["{}\n"], "Status.json")], none), 0);
 });

@@ -3,7 +3,7 @@
 import { buildRows, defaultFetchJson } from "./src/ardent.js";
 import { FRONTIER_URL, historyFromLines, parseLive, suggestDestination } from "./src/cg.js";
 import { JournalState } from "./src/journal.js";
-import { JournalTail } from "./src/tail.js";
+import { JournalTail, readJournalFiles } from "./src/tail.js";
 import { MAX_AGE_DEFAULT, ageTag, ageText, buildMixed, compareValues, mixedSortValue, padForShip }
   from "./src/model.js";
 
@@ -19,6 +19,10 @@ const TOP_STATIONS = 40;
 const EXPANDED_BY_DEFAULT = 5;
 const POLL_MS = 2000;
 const JOURNAL_FILES = 12;
+// Chrome and Edge can keep a folder open and tail it. Firefox can only be
+// handed a snapshot of one through <input webkitdirectory>.
+const CAN_TAIL = "showDirectoryPicker" in window;
+const CAN_SNAPSHOT = "webkitdirectory" in document.createElement("input");
 
 const store = {
   get(key, fallback) {
@@ -355,7 +359,7 @@ function render() {
 function renderCalibration() {
   $("calibration").textContent = S.journal
     ? `Trip timings: ${S.journal.cal.summary()}`
-    : "Trip timings: estimates. Connect your journal folder to calibrate them to your flying.";
+    : "Trip timings: estimates. Add your journal folder to calibrate them to your flying.";
 }
 
 // -- journal --------------------------------------------------------------------
@@ -382,28 +386,31 @@ const shipKey = () => (S.journal ? `${S.journal.ship}|${S.journal.shipId}|${S.jo
 
 function renderJournal() {
   const j = S.journal;
-  $("journal-status").textContent = j
-    ? `CMDR ${j.commander || "?"} · ${j.shipName || j.ship || "no ship seen"}${j.ship && !j.cargoCapacity ? " (waiting for loadout)" : ""}${j.system ? ` · ${j.system}` : ""}`
+  const when = S.snapshotAt
+    ? ` · read at ${new Date(S.snapshotAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}, load again after docking to refresh`
     : "";
-  $("journal-btn").textContent = j ? "Change folder" : "Connect journal folder";
+  $("journal-status").textContent = j
+    ? `CMDR ${j.commander || "?"} · ${j.shipName || j.ship || "no ship seen"}${j.ship && !j.cargoCapacity ? " (waiting for loadout)" : ""}${j.system ? ` · ${j.system}` : ""}${when}`
+    : "";
+  $("journal-btn").textContent = CAN_TAIL
+    ? (j ? "Change folder" : "Connect journal folder")
+    : (j ? "Load journal folder again" : "Load journal folder");
 }
 
-async function connectJournal(dir) {
-  clearTimeout(S.pollTimer);
+/** A fresh journal reader: the state, the goal lines it saw, and its sink. */
+function newJournal() {
   const state = new JournalState();
   const lines = [];
-  const tail = new JournalTail(dir, (line, live) => {
+  const sink = (line, live) => {
     state.handle(line, live);
     if (line.includes('"CommunityGoal"')) lines.push(line);
-  });
-  $("journal-status").textContent = "Reading journals…";
-  const n = await tail.prime(JOURNAL_FILES);
-  if (!n) {
-    $("journal-status").textContent = "No Journal.*.log files in that folder.";
-    return;
-  }
+  };
+  return { state, lines, sink };
+}
+
+/** Make a freshly read journal the one the page uses. */
+function adoptJournal({ state, lines }) {
   S.journal = state;
-  S.tail = tail;
   S.cgLines = lines;
   S.shipKey = shipKey();
   state.onDocked = (station, system) => {
@@ -415,6 +422,53 @@ async function connectJournal(dir) {
   renderControls();
   renderJournal();
   if (resolveDest() || S.result) search();
+}
+
+/** Firefox: read a one-off snapshot of the folder. Nothing updates after. */
+async function loadSnapshot(files) {
+  clearTimeout(S.pollTimer);
+  S.tail = null;
+  const j = newJournal();
+  $("journal-status").textContent = "Reading journals…";
+  let n;
+  try {
+    n = await readJournalFiles(files, j.sink, JOURNAL_FILES);
+  } catch (err) {
+    $("journal-status").textContent = `Couldn't read that folder (${err.name}). Load it again.`;
+    return;
+  }
+  if (!n) {
+    $("journal-status").textContent = "No Journal.*.log files in that folder.";
+    return;
+  }
+  S.snapshotAt = Date.now();
+  adoptJournal(j);
+}
+
+async function connectJournal(dir) {
+  clearTimeout(S.pollTimer);
+  const j = newJournal();
+  const tail = new JournalTail(dir, j.sink);
+  $("journal-status").textContent = "Reading journals…";
+  let n;
+  try {
+    n = await tail.prime(JOURNAL_FILES);
+  } catch (err) {
+    // A remembered folder that was moved or deleted: forget it rather than
+    // failing the same way on every visit.
+    if (err.name === "NotFoundError") {
+      try { await kv("journalDir", null); } catch { /* nothing remembered */ }
+    }
+    $("journal-status").textContent = `Couldn't read that folder (${err.name}). Connect it again.`;
+    return;
+  }
+  if (!n) {
+    $("journal-status").textContent = "No Journal.*.log files in that folder.";
+    return;
+  }
+  S.tail = tail;
+  S.snapshotAt = null;
+  adoptJournal(j);
   const loop = async () => {
     try {
       if (await S.tail.poll()) {
@@ -444,14 +498,30 @@ async function pickJournal() {
   }
 }
 
-async function restoreJournal() {
+/** Decided before anything loads, so a quick click never finds a dead button. */
+function setupJournalButton() {
   const btn = $("journal-btn");
-  if (!("showDirectoryPicker" in window)) {
-    btn.disabled = true;
-    $("journal-status").textContent = "Journal reading needs Chrome or Edge. Enter your ship's figures by hand.";
-    return;
+  btn.title = "Usually C:\\Users\\<you>\\Saved Games\\Frontier Developments\\Elite Dangerous";
+  if (CAN_TAIL) {
+    btn.onclick = pickJournal;
+  } else if (CAN_SNAPSHOT) {
+    const input = $("journal-files");
+    btn.onclick = () => input.click();
+    input.onchange = () => {
+      const files = [...input.files];
+      input.value = "";                 // so picking the same folder again still fires
+      if (files.length) loadSnapshot(files);
+    };
+  } else {
+    btn.hidden = true;
+    $("journal-status").textContent = "This browser can't read the journal folder: enter your ship's figures by hand.";
   }
-  btn.title = "Usually %USERPROFILE%\\Saved Games\\Frontier Developments\\Elite Dangerous";
+  renderJournal();
+}
+
+async function restoreJournal() {
+  if (!CAN_TAIL) return;
+  const btn = $("journal-btn");
   let dir;
   try { dir = await kv("journalDir"); } catch { return; }
   if (!dir) return;
@@ -477,7 +547,6 @@ function bind() {
   });
   $("tab-mixed").onclick = () => { S.view = "mixed"; render(); };
   $("tab-single").onclick = () => { S.view = "single"; render(); };
-  $("journal-btn").onclick = pickJournal;
   $("notice-close").onclick = () => { S.noticeDismissed = true; renderDest(); };
   $("d-live").onchange = () => {
     const g = S.live.filter((x) => x.is_trade)[Number($("d-live").value)];
@@ -516,12 +585,17 @@ function bind() {
 
 async function main() {
   bind();
+  setupJournalButton();
   renderControls();
   render();
   await loadLive();
   resolveDest();
   render();
-  await restoreJournal();
+  try {
+    await restoreJournal();
+  } catch (err) {
+    $("journal-status").textContent = `Couldn't reopen the journal folder (${err.name}). Connect it again.`;
+  }
   const r = S.result;
   const fresh = r && sameDest(r.p.dest, S.dest) && (Date.now() - r.at) / 60000 < CACHE_FRESH_MINUTES;
   if (S.dest && !fresh && !S.searching) search();
