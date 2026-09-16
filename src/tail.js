@@ -2,6 +2,19 @@
 // recent history once, then tail the newest journal.
 
 const JOURNAL = /^Journal\..+\.log$/;
+const MARKET = "Market.json";
+
+/** Parse a Market.json File, or null if it is missing or mid-write.
+
+ The game truncates and rewrites in place, so a read landing inside a write
+ sees half a document. That is normal; the next one gets a whole one. */
+async function parseMarket(file) {
+  try {
+    return JSON.parse(await file.text());
+  } catch {
+    return null;
+  }
+}
 
 /** Complete lines in `bytes` and how many bytes they used; a partial last
  *  line is left for the next read, since the game may be mid-write. */
@@ -52,6 +65,19 @@ export class JournalTail {
     return n;
   }
 
+  /** The market the game last wrote, from the folder we already hold.
+
+   Market.json sits beside the journals, so the permission granted for one
+   covers the other - nothing extra is asked of the user. */
+  async market() {
+    try {
+      const handle = await this.dir.getFileHandle(MARKET);
+      return await parseMarket(await handle.getFile());
+    } catch {
+      return null;                              // not docked yet, or no file
+    }
+  }
+
   /** Read whatever is new, following the game onto a new journal. */
   async poll() {
     const newest = (await listJournals(this.dir)).at(-1);
@@ -84,4 +110,10 @@ export async function readJournalFiles(fileList, sink, files = 12) {
     n += lines.length;
   }
   return n;
+}
+
+/** Market.json out of a one-off folder snapshot, or null if it is not there. */
+export async function readMarketFile(fileList) {
+  const f = [...fileList].find((x) => x.name === MARKET);
+  return f ? parseMarket(f) : null;
 }

@@ -4,8 +4,10 @@ import { buildRows, defaultFetchJson } from "./src/ardent.js";
 import { BodyLookup } from "./src/bodies.js";
 import { folderTooltip } from "./src/browser.js";
 import { FRONTIER_URL, historyFromLines, parseLive, suggestDestination } from "./src/cg.js";
+import { Sender } from "./src/eddn.js";
 import { JournalState } from "./src/journal.js";
-import { JournalTail, readJournalFiles } from "./src/tail.js";
+import { JournalTail, readJournalFiles, readMarketFile } from "./src/tail.js";
+import { VERSION } from "./src/version.js";
 import { MAX_AGE_DEFAULT, ageTag, ageText, buildMixed, compareValues, mixedSortValue, padForShip,
   whereItIs } from "./src/model.js";
 
@@ -51,6 +53,12 @@ const S = {
   expanded: null,
   searching: false,
   noticeDismissed: false,
+  // Off until asked for. Everything this page shows is built from market
+  // readings other commanders uploaded; sharing yours back is the other half
+  // of that, but it is public and it is their call, not ours.
+  eddn: store.get("cgbuy.eddn", false),
+  sender: new Sender(store.get("cgbuy.eddnSeen", [])),
+  snapshotFiles: null,
 };
 
 // -- tiny DOM helper ---------------------------------------------------------
@@ -445,6 +453,51 @@ function renderJournal() {
     : (j ? "Load journal folder again" : "Load journal folder");
 }
 
+/** Send the market the game last wrote, if sharing is on.
+
+ Called when the journal logs a Market event, which is the game saying it has
+ just rewritten Market.json. Everything that could make this a bad idea - a
+ repeat, a stale reading, a malformed table - is the Sender's to refuse. */
+async function shareMarket() {
+  if (!S.eddn || !S.journal) return;
+  let market = null;
+  try {
+    market = S.tail ? await S.tail.market()
+      : S.snapshotFiles ? await readMarketFile(S.snapshotFiles) : null;
+  } catch { /* not docked, or the game is mid-write */ }
+  if (!market) return;
+  const j = S.journal;
+  await S.sender.maybeSend(market, {
+    commander: j.commander, horizons: j.horizons, odyssey: j.odyssey,
+    gameversion: j.gameversion, gamebuild: j.gamebuild, softwareVersion: VERSION,
+  });
+  store.set("cgbuy.eddnSeen", S.sender.toList());
+  renderEddn();
+}
+
+/** The toggle, who it uploads as, and what it has done this session. */
+function renderEddn() {
+  const label = $("eddn-label");
+  const box = $("f-eddn");
+  label.hidden = !S.journal;
+  box.checked = S.eddn;
+  label.title = S.journal
+    ? `Send the market data the game writes when you dock back to EDDN, which is `
+      + `where Ardent - the source of every price on this page - gets it from.\n\n`
+      + `Public and pseudonymous: it uploads as commander ${S.journal.commander || "?"}, `
+      + `exactly as E:D Market Connector does. Only the station's price table is sent.`
+    : "";
+  const bits = [];
+  if (S.eddn && S.journal) {
+    bits.push(`sharing as CMDR ${S.journal.commander || "?"}`);
+    if (!CAN_TAIL) bits.push("only what the last folder load saw");
+  }
+  const done = S.sender.summary();
+  if (done) bits.push(done);
+  if (S.sender.last && S.sender.last !== done) bits.push(S.sender.last);
+  $("eddn-status").textContent = bits.length ? `· ${bits.join(" · ")}` : "";
+}
+
 /** A fresh journal reader: the state, the goal lines it saw, and its sink. */
 function newJournal() {
   const state = new JournalState();
@@ -480,8 +533,15 @@ function adoptJournal({ state, lines }) {
       search();
     }
   };
+  // The game writes Market.json and then logs this, so the file is there by
+  // the time we are told about it.
+  state.onEvent = (e) => { if (e.event === "Market") shareMarket(); };
   renderControls();
   renderJournal();
+  renderEddn();
+  // A snapshot has no live events, so the one market it holds gets its only
+  // chance here. The Sender refuses it if it is too old to be worth sending.
+  if (!CAN_TAIL) shareMarket();
   if (resolveDest() || S.result) search();
 }
 
@@ -503,6 +563,7 @@ async function loadSnapshot(files) {
     return;
   }
   S.snapshotAt = Date.now();
+  S.snapshotFiles = files;
   adoptJournal(j);
 }
 
@@ -529,6 +590,7 @@ async function connectJournal(dir) {
   }
   S.tail = tail;
   S.snapshotAt = null;
+  S.snapshotFiles = null;
   adoptJournal(j);
   const loop = async () => {
     try {
@@ -607,6 +669,14 @@ function bind() {
     readControls();
     if (e.target.id === "f-max_age_days") search();   // hidden rows aren't kept anywhere
   });
+  $("f-eddn").onchange = () => {
+    S.eddn = $("f-eddn").checked;
+    store.set("cgbuy.eddn", S.eddn);
+    renderEddn();
+    // Turning it on mid-session should not wait for the next dock to mean
+    // anything: the market already on disk is the one you just left.
+    if (S.eddn) shareMarket();
+  };
   $("tab-mixed").onclick = () => { S.view = "mixed"; render(); };
   $("tab-single").onclick = () => { S.view = "single"; render(); };
   $("notice-close").onclick = () => { S.noticeDismissed = true; renderDest(); };
