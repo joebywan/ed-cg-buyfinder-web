@@ -38,6 +38,17 @@ one row per commodity at each station. Click any column header to sort.
 `AGE` is how long ago someone last reported that market: green is 2 days or
 less, amber up to 7, red beyond.
 
+**ODYSSEY** decides whether stations on a planet surface are candidates at all
+— settlements, planetary outposts and ports. It is off by default because a
+surface market is a different trip from a starport: a glide down, a pad on a
+rock, and a client that owns the expansion. The first time your journal names
+a game it sets the box for you from what that game is running; after that the
+choice is yours.
+
+**Hover a station to see which body it is.** `LS` says how long the approach
+is; it does not say whether it ends at a starport you dock at or a pad you
+have to glide down to — and if it is a surface, which rock you set course for.
+
 **DESTINATION** lets you pick a different goal, or any station and commodity
 list, and that choice sticks until you press **BACK TO AUTOMATIC**.
 
@@ -47,8 +58,10 @@ Docking at the goal station re-runs the search, since the run just ended.
 
 - Markets come from [Ardent Insight](https://ardent-insight.com) rather than
   Spansh, which does not allow other web pages to read its data.
-- Not here yet: EDDN sharing, desktop notifications, the SCO readout, the
-  reward-tier estimate.
+- Not here yet: EDDN sharing, desktop notifications, the reward-tier estimate.
+- The body a station sits on or orbits comes free here: Ardent records it for
+  orbital starports as well as surface stations, where the desktop app has to
+  ask EDSM for half of it.
 - Keep the tab open. A tab left in the background for a while is only checked
   about once a minute, so updates can lag.
 

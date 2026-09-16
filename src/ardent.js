@@ -1,6 +1,6 @@
 // Market discovery through Ardent Insight, which follows EDDN live and,
 // unlike Spansh, lets a web page read its answers.
-import { MAX_AGE_DEFAULT, daysOld, padFits, tripMinutes } from "./model.js";
+import { MAX_AGE_DEFAULT, daysOld, isPlanetary, padFits, tripMinutes } from "./model.js";
 import { symbolFor } from "./commodities.js";
 
 export const ARDENT = "https://api.ardent-insight.com/v2";
@@ -24,6 +24,8 @@ function sourceRows(records, { commodity, sell, cgLs, origin, p, cal }) {
   for (const e of records) {
     const carrier = e.stationType === "FleetCarrier";
     if (carrier && !p.carriers) continue;
+    const planetary = isPlanetary(e.stationType);
+    if (planetary && !p.odyssey) continue;
     if (!padFits(e.maxLandingPadSize, p.pad)) continue;
     const stock = e.stock || 0;
     const buy = e.buyPrice || 0;
@@ -43,6 +45,10 @@ function sourceRows(records, { commodity, sell, cgLs, origin, p, cal }) {
     const load = Math.min(stock, p.hold);
     out.push({
       commodity, station: e.stationName ?? "?", system: e.systemName ?? "?", carrier,
+      // Ardent carries the body for orbital stations as well as surface
+      // ones, which is the whole answer - the desktop app has to ask a
+      // second service for half of it.
+      planetary, stype: e.stationType ?? "", body: e.bodyName ?? "",
       ly: round1(dist), ls: Math.round(ls), supply: stock, buy, sell, profit_per_t: profit,
       load, loads_available: round1(stock / p.hold), trip_minutes: round1(mins),
       trip_profit: load * profit, cr_per_min: Math.round(load * profit / mins),

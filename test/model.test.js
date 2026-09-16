@@ -204,3 +204,62 @@ test("age tags follow the fresh and stale thresholds", () => {
   assert.equal(m.ageTag("2026-09-01", now), "age-old");
   assert.equal(m.ageTag(null, now), "age-old");
 });
+
+// -- where a station actually is ----------------------------------------------
+
+test("surface station types are the ones you land on", () => {
+  for (const t of ["CraterOutpost", "CraterPort", "OnFootSettlement", "SurfaceStation"]) {
+    assert.ok(m.isPlanetary(t), t);
+  }
+  for (const t of ["Coriolis", "Orbis", "Ocellus", "Outpost", "AsteroidBase",
+                   "MegaShip", "FleetCarrier", "Dodec"]) {
+    assert.ok(!m.isPlanetary(t), t);
+  }
+});
+
+test("an unknown station type is treated as orbital", () => {
+  // Hiding a station the commander could have flown to is the worse error:
+  // they would never know it was there.
+  assert.ok(!m.isPlanetary("OrbitalWhatsit"));
+  assert.ok(!m.isPlanetary(undefined));
+});
+
+test("station types read as the game names them", () => {
+  assert.equal(m.stationTypeLabel("CraterOutpost"), "Planetary Outpost");
+  assert.equal(m.stationTypeLabel("OnFootSettlement"), "Odyssey Settlement");
+  assert.equal(m.stationTypeLabel("Orbis"), "Orbis Starport");
+  assert.equal(m.stationTypeLabel("OrbitalWhatsit"), "OrbitalWhatsit");
+  assert.equal(m.stationTypeLabel(null), "Station");
+});
+
+test("an orbital station says what it orbits, a surface one what it is on", () => {
+  assert.equal(
+    m.whereItIs({ stype: "Orbis", body: "Shinrarta Dezhra AB 2 i", planetary: false }),
+    "Orbis Starport — orbiting Shinrarta Dezhra AB 2 i");
+  assert.equal(
+    m.whereItIs({ stype: "CraterPort", body: "Mercury", planetary: true }),
+    "Planetary Port — on Mercury");
+});
+
+test("a carrier orbits nothing", () => {
+  const t = m.whereItIs({ stype: "FleetCarrier", carrier: true, body: "" });
+  assert.match(t, /orbits nothing/);
+});
+
+test("a missing body says so rather than guessing", () => {
+  assert.equal(m.whereItIs({ stype: "Outpost", body: "", planetary: false }),
+    "Outpost — no body on record");
+  assert.equal(m.whereItIs(null), "");
+});
+
+test("a mixed plan inherits the station's body from its rows", () => {
+  const row = (commodity, over = {}) => ({
+    commodity, station: "Walz Depot", system: "Sol", supply: 100, profit_per_t: 10,
+    buy: 1, ly: 1, ls: 205, carrier: false, updated: "2026-09-15", trip_minutes: 10,
+    planetary: true, stype: "CraterOutpost", body: "Mercury", ...over,
+  });
+  const [plan] = m.buildMixed([row("Gold"), row("Silver", { profit_per_t: 5 })], 720);
+  assert.equal(plan.planetary, true);
+  assert.equal(plan.body, "Mercury");
+  assert.equal(m.whereItIs(plan), "Planetary Outpost — on Mercury");
+});

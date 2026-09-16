@@ -148,6 +148,7 @@ export class JournalState {
     this.station = null;
     this.docked = false;
     this.commander = null;
+    this.odyssey = null;          // null until a LoadGame says either way
     this.ship = null;             // internal name, e.g. "panthermkii"
     this.shipId = null;
     this.shipName = null;
@@ -247,6 +248,9 @@ export class JournalState {
     } else if (ev === "LoadGame" || ev === "Fileheader") {
       this.setShip(e.Ship, e.ShipID, e.Ship_Localised);
       this.commander = e.Commander ?? this.commander;
+      // Which game this commander is running, which is exactly the question
+      // the ODYSSEY box asks. Only ever used to seed it.
+      if (e.Odyssey != null) this.odyssey = e.Odyssey;
     } else if (ev === "Cargo" && e.Count != null) {
       this.cargo = e.Count;
     } else if (ev === "Location") {

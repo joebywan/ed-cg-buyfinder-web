@@ -9,10 +9,12 @@ const NOW = new Date("2026-09-15T10:00:00Z");
 const FRESH = "2026-09-15T01:00:00.000Z";
 
 const rec = ({ station, system = "Src", x = 10, y = 0, z = 0, pad = 3, type = "Coriolis",
-               stock = 1000, buy = 1000, sell = 0, updated = FRESH, ls = 100, id }) => ({
+               stock = 1000, buy = 1000, sell = 0, updated = FRESH, ls = 100, id,
+               body = "Src 3 a" }) => ({
   stationName: station, systemName: system, systemX: x, systemY: y, systemZ: z,
   maxLandingPadSize: pad, stationType: type, stock, buyPrice: buy, sellPrice: sell,
-  updatedAt: updated, distanceToArrival: ls, marketId: id ?? station, distance: Math.round(Math.hypot(x, y, z)),
+  updatedAt: updated, distanceToArrival: ls, marketId: id ?? station, bodyName: body,
+  distance: Math.round(Math.hypot(x, y, z)),
 });
 
 const DEST_STATIONS = [
@@ -170,4 +172,60 @@ test("age filter hides stale rows, stands down when all are stale, 0 disables", 
   const res = await buildRows(P(), { fetchJson, now: NOW });
   assert.deepEqual(res.rows.map((r) => r.station), ["New"]);
   assert.equal(res.hiddenStale, 1);
+});
+
+
+// -- the ODYSSEY filter, and what a station is ---------------------------------
+
+test("stations on a surface are dropped unless ODYSSEY is on", async () => {
+  const both = routes({ "palladium/nearby": [
+    rec({ station: "Near", x: 10 }),
+    rec({ station: "Berdo Drilling Hub", x: 11, type: "OnFootSettlement" }),
+    rec({ station: "Walz Depot", x: 12, type: "CraterOutpost" }),
+    rec({ station: "Ehrlich City", x: 13, type: "CraterPort" }),
+  ] });
+  const off = await buildRows(P(), { fetchJson: fakeArdent(both).fetchJson, now: NOW });
+  assert.deepEqual(off.rows.map((r) => r.station), ["Near"]);
+
+  const on = await buildRows(P({ odyssey: true }), { fetchJson: fakeArdent(both).fetchJson, now: NOW });
+  assert.deepEqual(on.rows.map((r) => r.station).sort(),
+    ["Berdo Drilling Hub", "Ehrlich City", "Near", "Walz Depot"]);
+});
+
+test("a station type nobody has heard of stays visible", async () => {
+  // Getting it wrong this way leaves a station on screen that perhaps should
+  // not be; the other way hides one the commander could have flown to.
+  const { fetchJson } = fakeArdent(routes({ "palladium/nearby": [
+    rec({ station: "Something New", x: 10, type: "OrbitalWhatsit" }),
+  ] }));
+  const { rows } = await buildRows(P(), { fetchJson, now: NOW });
+  assert.deepEqual(rows.map((r) => r.station), ["Something New"]);
+});
+
+test("the body and the station type reach the row", async () => {
+  const { fetchJson } = fakeArdent(routes({ "palladium/nearby": [
+    rec({ station: "Jameson Memorial", x: 10, type: "Orbis", body: "Shinrarta Dezhra AB 2 i" }),
+  ] }));
+  const { rows } = await buildRows(P(), { fetchJson, now: NOW });
+  assert.equal(rows[0].body, "Shinrarta Dezhra AB 2 i");
+  assert.equal(rows[0].stype, "Orbis");
+  assert.equal(rows[0].planetary, false);
+});
+
+test("a surface station is marked as one", async () => {
+  const { fetchJson } = fakeArdent(routes({ "palladium/nearby": [
+    rec({ station: "Walz Depot", x: 10, type: "CraterOutpost", body: "Mercury" }),
+  ] }));
+  const { rows } = await buildRows(P({ odyssey: true }), { fetchJson, now: NOW });
+  assert.equal(rows[0].planetary, true);
+  assert.equal(rows[0].body, "Mercury");
+});
+
+test("a record with no body still ranks", async () => {
+  const { fetchJson } = fakeArdent(routes({ "palladium/nearby": [
+    rec({ station: "Near", x: 10, body: null }),
+  ] }));
+  const { rows } = await buildRows(P(), { fetchJson, now: NOW });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].body, "");
 });

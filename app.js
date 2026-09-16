@@ -1,18 +1,20 @@
 // The page: wires the pure modules in src/ to the DOM, localStorage and the
 // journal folder. Everything worth testing lives in src/.
 import { buildRows, defaultFetchJson } from "./src/ardent.js";
+import { BodyLookup } from "./src/bodies.js";
 import { folderTooltip } from "./src/browser.js";
 import { FRONTIER_URL, historyFromLines, parseLive, suggestDestination } from "./src/cg.js";
 import { JournalState } from "./src/journal.js";
 import { JournalTail, readJournalFiles } from "./src/tail.js";
-import { MAX_AGE_DEFAULT, ageTag, ageText, buildMixed, compareValues, mixedSortValue, padForShip }
-  from "./src/model.js";
+import { MAX_AGE_DEFAULT, ageTag, ageText, buildMixed, compareValues, mixedSortValue, padForShip,
+  whereItIs } from "./src/model.js";
 
 const $ = (id) => document.getElementById(id);
 const fmt = (n) => (n == null || n === "" ? "" : Number(n).toLocaleString("en-US"));
 
 const DEFAULTS = { hold: 64, range: 30, jump_empty: 20, jump_laden: 15, min_supply: 200,
-                   pad: "L", carriers: false, max_age_days: MAX_AGE_DEFAULT };
+                   pad: "L", carriers: false, odyssey: false,
+                   max_age_days: MAX_AGE_DEFAULT };
 const FIELDS = Object.keys(DEFAULTS);
 const SHIP_FIELDS = ["hold", "jump_empty", "jump_laden", "pad"];
 const CACHE_FRESH_MINUTES = 10;
@@ -275,26 +277,69 @@ function copySystem(ev) {
     () => toast("Clipboard blocked", ev));
 }
 
-const stationLabel = (x) => [x.station, x.carrier ? h("span", { class: "fc" }, " FC") : null];
+// The browser already knows how to show a tooltip: it waits for the pointer
+// to settle, follows it, and never flickers. Nothing here needs to be built.
+//
+// What it will not do is refresh a tooltip that is already up, so the EDSM
+// answer for an orbital station is asked for on mouseover - before the dwell
+// that makes the tooltip appear - and written back into the title. One
+// request answers a system, so the first hover pays for the rest of it.
+const bodies = new BodyLookup({ onResolved: retitle });
+
+function stationTitle(x) {
+  return whereItIs(x, { body: bodies.known(x.system, x.station),
+                        waiting: bodies.waiting(x.system) });
+}
+
+const stationCell = (x, ...extra) =>
+  h("td", { class: "station", title: stationTitle(x),
+            "data-station": x.station, "data-stype": x.stype || "",
+            "data-body": x.body || null,
+            // A carrier orbits nothing, so there is nothing to look up and
+            // nothing to rewrite.
+            "data-carrier": x.carrier || null },
+    ...extra, x.station, x.carrier ? h("span", { class: "fc" }, " FC") : null);
+
+/** Rewrite the titles for one system in place, without a re-render.
+
+ Rebuilt through stationTitle rather than patched as a string, so the wording
+ has exactly one source and cannot drift between first paint and refill. */
+function retitle(system) {
+  for (const td of document.querySelectorAll("td.station[data-station]")) {
+    if (td.dataset.body || td.dataset.carrier) continue;
+    const row = td.closest("tr[data-system]");
+    if (!row || (system && row.dataset.system !== system)) continue;
+    td.title = stationTitle({ station: td.dataset.station, system: row.dataset.system,
+                              stype: td.dataset.stype, body: "", carrier: false,
+                              planetary: false });
+  }
+}
+
+/** A pointer resting anywhere near a station without a body asks for one. */
+function wantBody(ev) {
+  const td = ev.target.closest?.("td.station[data-station]");
+  if (!td || td.dataset.body || td.dataset.carrier) return;
+  const row = td.closest("tr[data-system]");
+  if (row) bodies.want(row.dataset.system);
+}
 const ageCell = (x) => h("td", { class: `num ${ageTag(x.updated)}` }, ageText(x.updated));
 
 function renderMixed(r) {
   const hold = r.p.hold;
   const plans = buildMixed(r.rows, hold).slice(0, TOP_STATIONS);
-  const key = (x) => `${x.station} ${x.system}`;
+  const key = (x) => `${x.station}\0${x.system}`;
   const best = plans[0] && key(plans[0]);
   if (!S.expanded) S.expanded = new Set(plans.slice(0, EXPANDED_BY_DEFAULT).map(key));
-  const body = h("tbody", { onclick: copySystem });
+  const body = h("tbody", { onclick: copySystem, onmouseover: wantBody });
   for (const plan of sorted(plans, S.sort.mixed)) {
     const k = key(plan);
     const open = S.expanded.has(k);
     body.append(h("tr", { class: `row head${k === best ? " top" : ""}`, "data-system": plan.system },
       h("td", {}, plan.system),
       h("td", { class: "num" }, plan.ly),
-      h("td", { class: "station" },
+      stationCell(plan,
         h("button", { class: "toggle", type: "button", "aria-expanded": String(open),
-          onclick: () => { open ? S.expanded.delete(k) : S.expanded.add(k); render(); } }, open ? "▾" : "▸"),
-        stationLabel(plan)),
+          onclick: () => { open ? S.expanded.delete(k) : S.expanded.add(k); render(); } }, open ? "▾" : "▸")),
       h("td", { class: "num" }, fmt(plan.ls)),
       ageCell(plan),
       h("td", { class: "num" }, fmt(plan.cr_per_min)),
@@ -304,7 +349,9 @@ function renderMixed(r) {
     if (!open) continue;
     for (const m of plan.mix) {
       body.append(h("tr", { class: "child", "data-system": plan.system },
-        h("td"), h("td"), h("td", { class: "station" }, m.commodity), h("td"), h("td"), h("td"),
+        h("td"), h("td"),
+        h("td", { class: "station", title: whereItIs(plan) }, m.commodity),
+        h("td"), h("td"), h("td"),
         h("td", { class: "num" }, fmt(m.value)), h("td", { class: "num" }, fmt(m.tonnes)),
         h("td", { class: "num" }, fmt(m.buy)), h("td", { class: "num" }, fmt(m.profit_per_t))));
     }
@@ -314,10 +361,10 @@ function renderMixed(r) {
 }
 
 function renderSingle(r) {
-  const body = h("tbody", { onclick: copySystem });
+  const body = h("tbody", { onclick: copySystem, onmouseover: wantBody });
   for (const x of sorted(r.rows, S.sort.single)) {
     body.append(h("tr", { class: "row", "data-system": x.system },
-      h("td", {}, x.commodity), h("td", {}, x.system), h("td", {}, stationLabel(x)),
+      h("td", {}, x.commodity), h("td", {}, x.system), stationCell(x),
       h("td", { class: "num" }, x.ly), h("td", { class: "num" }, fmt(x.ls)),
       h("td", { class: "num" }, fmt(x.supply)), h("td", { class: "num" }, x.loads_available),
       h("td", { class: "num" }, fmt(x.buy)), h("td", { class: "num" }, fmt(x.profit_per_t)),
@@ -409,11 +456,24 @@ function newJournal() {
   return { state, lines, sink };
 }
 
+/** Seed the ODYSSEY box from the game, once.
+
+ LoadGame says which game this commander is running, which is the question
+ the box asks. Only ever a seed: after that the choice is theirs, and a
+ deliberate "off" has to survive a journal that says they own it. */
+function adoptOdyssey(state) {
+  const saved = store.get("cgbuy.settings", {});
+  if ("odyssey" in saved || state?.odyssey == null) return;
+  S.settings.odyssey = !!state.odyssey;
+  store.set("cgbuy.settings", S.settings);
+}
+
 /** Make a freshly read journal the one the page uses. */
 function adoptJournal({ state, lines }) {
   S.journal = state;
   S.cgLines = lines;
   S.shipKey = shipKey();
+  adoptOdyssey(state);
   state.onDocked = (station, system) => {
     if (S.dest && station === S.dest.station && system === S.dest.system) {
       S.noticeDismissed = false;       // docking unregistered is when the reminder matters
