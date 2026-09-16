@@ -49,6 +49,29 @@ choice is yours.
 is; it does not say whether it ends at a starport you dock at or a pad you
 have to glide down to — and if it is a surface, which rock you set course for.
 
+## Sharing back
+
+Every price on this page started as a market reading some other commander
+uploaded: the page reads Ardent, Ardent is built from EDDN, and EDDN is built
+from people running uploaders. **SHARE TO EDDN** is the other half of that —
+when you dock, the price table the game writes goes back to the same pool.
+
+It is **off until you turn it on**, and it appears only once the page can see
+your journal folder. It is public and pseudonymous: it uploads as your
+commander name, exactly as E:D Market Connector does, and sends nothing but
+the station's commodity table — no position, no route, no cargo.
+
+Only the schema `commodity/3` is sent, which is the one this tool itself
+consumes. Anything malformed is caught here rather than at EDDN, and a
+reading is never sent twice.
+
+**Chrome or Edge** share as you play, because they can keep reading the
+folder. **Firefox, Brave and Safari** only ever hand over a snapshot, so they
+share at most the one market that was on disk when you last loaded the
+folder — and nothing at all if that reading is over an hour old, because
+republishing stale supply figures as current is the problem this tool exists
+to complain about.
+
 **DESTINATION** lets you pick a different goal, or any station and commodity
 list, and that choice sticks until you press **BACK TO AUTOMATIC**.
 
@@ -58,7 +81,7 @@ Docking at the goal station re-runs the search, since the run just ended.
 
 - Markets come from [Ardent Insight](https://ardent-insight.com) rather than
   Spansh, which does not allow other web pages to read its data.
-- Not here yet: EDDN sharing, desktop notifications, the reward-tier estimate.
+- Not here yet: desktop notifications, the reward-tier estimate.
 - The body a station sits on or orbits comes free here: Ardent records it for
   orbital starports as well as surface stations, where the desktop app has to
   ask EDSM for half of it.
@@ -77,6 +100,9 @@ Plain HTML, CSS and ES modules. No dependencies and no build step.
 | `src/ardent.js` | market discovery through Ardent |
 | `src/commodities.js` | display name → FDev symbol, generated from [EDCD/FDevIDs](https://github.com/EDCD/FDevIDs) |
 | `src/tail.js` | reads the journal folder through the File System Access API |
+| `src/eddn.js` | the `commodity/3` uploader: schema, local validation, dedup |
+| `src/bodies.js` | which body an orbital station orbits, from EDSM |
+| `src/version.js` | the version number, which EDDN records as `softwareVersion` |
 | `app.js` | the page itself |
 
 ```
