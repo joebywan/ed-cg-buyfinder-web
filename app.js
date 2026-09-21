@@ -6,7 +6,7 @@ import { folderTooltip } from "./src/browser.js";
 import { FRONTIER_URL, historyFromLines, parseLive, suggestDestination } from "./src/cg.js";
 import { Sender } from "./src/eddn.js";
 import { JournalState } from "./src/journal.js";
-import { JournalTail, readJournalFiles, readMarketFile } from "./src/tail.js";
+import { JournalTail, readJournalFiles, readStationFile } from "./src/tail.js";
 import { VERSION } from "./src/version.js";
 import { MAX_AGE_DEFAULT, ageTag, ageText, buildMixed, compareValues, mixedSortValue, padForShip,
   whereItIs } from "./src/model.js";
@@ -453,24 +453,33 @@ function renderJournal() {
     : (j ? "Load journal folder again" : "Load journal folder");
 }
 
-/** Send the market the game last wrote, if sharing is on.
+// Each means "I have just rewritten the matching .json file". Market is the
+// only one this page reads back; the other two are given.
+const EDDN_KINDS = ["Market", "Outfitting", "Shipyard"];
 
- Called when the journal logs a Market event, which is the game saying it has
- just rewritten Market.json. Everything that could make this a bad idea - a
- repeat, a stale reading, a malformed table - is the Sender's to refuse. */
-async function shareMarket() {
+/** Send one of the station files the game last wrote, if sharing is on.
+
+ Everything that could make this a bad idea - a repeat, a stale reading, a
+ file left behind by another station, a malformed list - is the Sender's to
+ refuse rather than this function's to guess at. */
+async function shareStation(kind, marketId = null) {
   if (!S.eddn || !S.journal) return;
-  let market = null;
+  let data = null;
   try {
-    market = S.tail ? await S.tail.market()
-      : S.snapshotFiles ? await readMarketFile(S.snapshotFiles) : null;
-  } catch { /* not docked, or the game is mid-write */ }
-  if (!market) return;
+    data = S.tail ? await S.tail.stationFile(kind)
+      : S.snapshotFiles ? await readStationFile(S.snapshotFiles, kind) : null;
+  } catch { /* never used that service, or the game is mid-write */ }
+  if (!data) return;
   const j = S.journal;
-  await S.sender.maybeSend(market, {
-    commander: j.commander, horizons: j.horizons, odyssey: j.odyssey,
-    gameversion: j.gameversion, gamebuild: j.gamebuild, softwareVersion: VERSION,
-  });
+  const common = {
+    commander: j.commander, odyssey: j.odyssey, gameversion: j.gameversion,
+    gamebuild: j.gamebuild, softwareVersion: VERSION,
+  };
+  if (kind === "Market") {
+    await S.sender.maybeSend(data, { ...common, horizons: j.horizons });
+  } else {
+    await S.sender.maybeSendStation(kind, data, { ...common, marketId });
+  }
   store.set("cgbuy.eddnSeen", S.sender.toList());
   renderEddn();
 }
@@ -482,10 +491,12 @@ function renderEddn() {
   label.hidden = !S.journal;
   box.checked = S.eddn;
   label.title = S.journal
-    ? `Send the market data the game writes when you dock back to EDDN, which is `
-      + `where Ardent - the source of every price on this page - gets it from.\n\n`
+    ? `Send the market, outfitting and shipyard lists the game writes when you dock `
+      + `back to EDDN, which is where Ardent - the source of every price on this `
+      + `page - gets its data from.\n\n`
       + `Public and pseudonymous: it uploads as commander ${S.journal.commander || "?"}, `
-      + `exactly as E:D Market Connector does. Only the station's price table is sent.`
+      + `exactly as E:D Market Connector does. Only what the station sells is sent `
+      + `- no position, no route, no cargo.`
     : "";
   const bits = [];
   if (S.eddn && S.journal) {
@@ -535,13 +546,16 @@ function adoptJournal({ state, lines }) {
   };
   // The game writes Market.json and then logs this, so the file is there by
   // the time we are told about it.
-  state.onEvent = (e) => { if (e.event === "Market") shareMarket(); };
+  state.onEvent = (e) => {
+    if (EDDN_KINDS.includes(e.event)) shareStation(e.event, e.MarketID ?? null);
+  };
   renderControls();
   renderJournal();
   renderEddn();
-  // A snapshot has no live events, so the one market it holds gets its only
-  // chance here. The Sender refuses it if it is too old to be worth sending.
-  if (!CAN_TAIL) shareMarket();
+  // A snapshot has no live events, so the files it holds get their only
+  // chance here. The Sender refuses anything too old to be worth sending,
+  // which these usually are - hence no market ID to check them against.
+  if (!CAN_TAIL) for (const k of EDDN_KINDS) shareStation(k);
   if (resolveDest() || S.result) search();
 }
 
@@ -674,8 +688,8 @@ function bind() {
     store.set("cgbuy.eddn", S.eddn);
     renderEddn();
     // Turning it on mid-session should not wait for the next dock to mean
-    // anything: the market already on disk is the one you just left.
-    if (S.eddn) shareMarket();
+    // anything: what is already on disk is the station you just left.
+    if (S.eddn) for (const k of EDDN_KINDS) shareStation(k);
   };
   $("tab-mixed").onclick = () => { S.view = "mixed"; render(); };
   $("tab-single").onclick = () => { S.view = "single"; render(); };

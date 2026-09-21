@@ -9,13 +9,37 @@
 // and the same local validation, because a malformed message published under
 // a software name is worse than no message at all.
 //
-// Only the commodity table goes: system, station, and the prices the game
-// itself wrote to Market.json. The commander name is the uploader ID, as
-// EDMC and every other uploader does it.
+// Three schemas, all written by the game itself and none of them about you:
+// the price table from Market.json, the module list from Outfitting.json and
+// the hulls from Shipyard.json. Only the first is data this page reads back -
+// the other two are given rather than taken, and cost nothing, because the
+// files are already in the folder we can see. The commander name is the
+// uploader ID, as EDMC and every other uploader does it.
 
 export const EDDN_URL = "https://eddn.edcd.io:4430/upload/";
 export const SCHEMA = "https://eddn.edcd.io/schemas/commodity/3";
+export const OUTFITTING_SCHEMA = "https://eddn.edcd.io/schemas/outfitting/2";
+export const SHIPYARD_SCHEMA = "https://eddn.edcd.io/schemas/shipyard/2";
 export const SOFTWARE = "cgbuy-web";
+
+// Fitted to every hull ever built, so its presence says nothing about the
+// station. EDMC drops it, and a list that disagrees with EDMC's for the same
+// station is worse than either list alone.
+export const UNIVERSAL_MODULE = "int_planetapproachsuite";
+
+// outfitting/2 admits only these, and EDMC capitalises exactly this much of
+// the name: "hpt_slugshot_gimbal_large" goes as "Hpt_slugshot_gimbal_large"
+// and "adder_armour_grade1" as "adder_Armour_grade1".
+export const MODULE_RE = /^Hpt_|^Int_|Armour_/i;
+
+const OUTFITTING_KEYS = new Set([
+  "systemName", "stationName", "marketId", "timestamp", "modules",
+  "horizons", "odyssey",
+]);
+const SHIPYARD_KEYS = new Set([
+  "systemName", "stationName", "marketId", "timestamp", "ships",
+  "horizons", "odyssey",
+]);
 
 // Limpets are not tradeable market goods and must not be sent.
 const NON_MARKET_NAMES = new Set(["drones"]);
@@ -105,6 +129,91 @@ export function buildMessage(market, { commander, horizons = null, odyssey = nul
     },
     message,
   };
+}
+
+/** EDMC's spelling of a module name, so both uploaders agree. */
+export function moduleName(raw) {
+  return String(raw ?? "").replace(MODULE_RE, (m) =>
+    m.charAt(0).toUpperCase() + m.slice(1).toLowerCase());
+}
+
+/** The half of an outfitting/shipyard message that is not the list.
+
+ Horizons comes off the file rather than the journal: it is the game saying
+ what this station's list was drawn from, where the journal's flag is about
+ the commander. */
+function stationHeader(data, schema, { commander, odyssey = null,
+                                       softwareVersion = "0" }) {
+  for (const k of ["StarSystem", "StationName", "MarketID", "timestamp"]) {
+    if (data?.[k] == null || data[k] === "") throw new Error(`missing ${k}`);
+  }
+  const message = {
+    systemName: data.StarSystem,
+    stationName: data.StationName,
+    marketId: data.MarketID,
+    timestamp: data.timestamp,
+    horizons: !!data.Horizons,
+  };
+  if (odyssey != null) message.odyssey = !!odyssey;
+  return {
+    $schemaRef: schema,
+    header: { uploaderID: commander || "unknown", softwareName: SOFTWARE,
+              softwareVersion },
+    message,
+  };
+}
+
+/** Outfitting.json -> an EDDN outfitting/2 envelope. */
+export function buildOutfitting(data, opts = {}) {
+  const env = stationHeader(data, OUTFITTING_SCHEMA, opts);
+  const names = new Set();
+  for (const it of data?.Items ?? []) {
+    if (!it?.Name || it.Name === UNIVERSAL_MODULE) continue;
+    names.add(moduleName(it.Name));
+  }
+  env.message.modules = [...names].sort();
+  return env;
+}
+
+/** Shipyard.json -> an EDDN shipyard/2 envelope.
+
+ AllowCobraMkIV sits in the file and not in the schema, which sets
+ additionalProperties false - so it is one of the keys that would reject the
+ whole message, and it is left where it is. */
+export function buildShipyard(data, opts = {}) {
+  const env = stationHeader(data, SHIPYARD_SCHEMA, opts);
+  // The journal file spells it PriceList; EDMC reads Pricelist. Accept both
+  // rather than depend on which of them is the typo.
+  const list = data?.PriceList ?? data?.Pricelist ?? [];
+  env.message.ships = [...new Set(list.map((s) => s?.ShipType).filter(Boolean))].sort();
+  return env;
+}
+
+/** Shared checks for outfitting/2 and shipyard/2.
+
+ Both are the same shape: a station, a timestamp, and one non-empty list of
+ unique strings, with additionalProperties false over the lot. */
+export function validateListMessage(envelope, key, allowed) {
+  const problems = [];
+  const msg = envelope?.message ?? {};
+  const missing = ["systemName", "stationName", "marketId", "timestamp", key]
+    .filter((k) => !(k in msg));
+  if (missing.length) problems.push(`message missing ${missing.join(", ")}`);
+  const extra = Object.keys(msg).filter((k) => !allowed.has(k));
+  if (extra.length) problems.push(`message has undeclared ${extra.sort().join(", ")}`);
+  for (const h of ["uploaderID", "softwareName", "softwareVersion"]) {
+    if (!envelope?.header?.[h]) problems.push(`header missing ${h}`);
+  }
+  const items = msg[key] ?? [];
+  // minItems is 1: an empty list is not a station with nothing for sale, it
+  // is a reading that failed, and the schema says so.
+  if (!items.length) problems.push(`no ${key}`);
+  if (new Set(items).size !== items.length) problems.push(`${key} has duplicates`);
+  if (key === "modules") {
+    const bad = items.filter((m) => !MODULE_RE.test(m));
+    if (bad.length) problems.push(`modules outside the schema pattern: ${bad.slice(0, 3)}`);
+  }
+  return problems;
 }
 
 /** EDDN uses these to keep Live and Legacy data apart. */
@@ -237,6 +346,68 @@ export class Sender {
       this.#remember(key);
       this.sent++;
       this.last = `sent ${market.StationName} (${n} items)`;
+    } else {
+      this.failed++;
+      this.last = `failed: ${detail.slice(0, 80)}`;
+    }
+    return { ok, detail: this.last };
+  }
+
+  /** Send Outfitting.json or Shipyard.json, if it is this station's.
+
+   These files persist from the last station that HAD the service, so one
+   three systems behind the market beside it is the normal case, not the odd
+   one. `marketId` is the one the journal event just named; without checking
+   it, a shipyard from another system gets republished as this one. */
+  async maybeSendStation(kind, data, { commander, odyssey, gameversion, gamebuild,
+                                       softwareVersion = "0", marketId = null,
+                                       now = Date.now(), fetchImpl = fetch,
+                                       dryRun = false } = {}) {
+    const [build, key, allowed] = kind === "Outfitting"
+      ? [buildOutfitting, "modules", OUTFITTING_KEYS]
+      : [buildShipyard, "ships", SHIPYARD_KEYS];
+    if (data?.MarketID == null || !data?.timestamp) {
+      return { ok: false, detail: `${kind}.json missing MarketID/timestamp` };
+    }
+    if (marketId != null && data.MarketID !== marketId) {
+      // Not a failure: the game simply has not rewritten it yet.
+      return { ok: false, detail: `${kind}.json is another station's` };
+    }
+    const dedup = `${kind}:${data.MarketID}/${data.timestamp}`;
+    if (this.seen.has(dedup)) return { ok: false, detail: "already sent" };
+    if (tooOld(data.timestamp, now)) {
+      this.#remember(dedup);
+      this.last = `skipped: that ${kind.toLowerCase()} reading is over an hour old`;
+      return { ok: false, detail: this.last };
+    }
+
+    let env;
+    try {
+      env = addGameVersion(build(data, { commander, odyssey, softwareVersion }),
+                           gameversion, gamebuild);
+    } catch (err) {
+      this.failed++;
+      this.last = `bad ${kind}.json: ${err.message}`;
+      return { ok: false, detail: this.last };
+    }
+    const problems = validateListMessage(env, key, allowed);
+    if (problems.length) {
+      this.failed++;
+      this.last = `invalid ${kind.toLowerCase()}: ${problems[0]}`;
+      return { ok: false, detail: this.last };
+    }
+    const n = env.message[key].length;
+
+    if (dryRun) {
+      this.last = `DRY RUN ${kind.toLowerCase()} ${data.StationName} (${n} ${key})`;
+      return { ok: true, detail: this.last };
+    }
+
+    const { ok, detail } = await upload(env, { fetchImpl });
+    if (ok) {
+      this.#remember(dedup);
+      this.sent++;
+      this.last = `sent ${kind.toLowerCase()} ${data.StationName} (${n} ${key})`;
     } else {
       this.failed++;
       this.last = `failed: ${detail.slice(0, 80)}`;

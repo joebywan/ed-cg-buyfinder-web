@@ -2,13 +2,17 @@
 // recent history once, then tail the newest journal.
 
 const JOURNAL = /^Journal\..+\.log$/;
-const MARKET = "Market.json";
+// The three files the game rewrites when you use a station's services, and
+// the journal event that announces each one.
+export const STATION_FILES = { Market: "Market.json",
+                               Outfitting: "Outfitting.json",
+                               Shipyard: "Shipyard.json" };
 
 /** Parse a Market.json File, or null if it is missing or mid-write.
 
  The game truncates and rewrites in place, so a read landing inside a write
  sees half a document. That is normal; the next one gets a whole one. */
-async function parseMarket(file) {
+async function parseJson(file) {
   try {
     return JSON.parse(await file.text());
   } catch {
@@ -65,16 +69,16 @@ export class JournalTail {
     return n;
   }
 
-  /** The market the game last wrote, from the folder we already hold.
+  /** One of the station files the game last wrote, from the folder we hold.
 
-   Market.json sits beside the journals, so the permission granted for one
-   covers the other - nothing extra is asked of the user. */
-  async market() {
+   They sit beside the journals, so the permission granted for one covers
+   them all - nothing extra is asked of the user. */
+  async stationFile(kind) {
     try {
-      const handle = await this.dir.getFileHandle(MARKET);
-      return await parseMarket(await handle.getFile());
+      const handle = await this.dir.getFileHandle(STATION_FILES[kind]);
+      return await parseJson(await handle.getFile());
     } catch {
-      return null;                              // not docked yet, or no file
+      return null;                     // never used that service, or no file
     }
   }
 
@@ -112,8 +116,8 @@ export async function readJournalFiles(fileList, sink, files = 12) {
   return n;
 }
 
-/** Market.json out of a one-off folder snapshot, or null if it is not there. */
-export async function readMarketFile(fileList) {
-  const f = [...fileList].find((x) => x.name === MARKET);
-  return f ? parseMarket(f) : null;
+/** One station file out of a folder snapshot, or null if it is not there. */
+export async function readStationFile(fileList, kind) {
+  const f = [...fileList].find((x) => x.name === STATION_FILES[kind]);
+  return f ? parseJson(f) : null;
 }
