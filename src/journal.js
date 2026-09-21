@@ -148,7 +148,12 @@ export class JournalState {
     this.station = null;
     this.docked = false;
     this.commander = null;
-    this.odyssey = null;          // null until a LoadGame says either way
+    // Which game this is, for the ODYSSEY box and for EDDN, which uses them
+    // to keep Live and Legacy data apart. Null until a LoadGame says.
+    this.odyssey = null;
+    this.horizons = null;
+    this.gameversion = null;
+    this.gamebuild = null;
     this.ship = null;             // internal name, e.g. "panthermkii"
     this.shipId = null;
     this.shipName = null;
@@ -248,9 +253,12 @@ export class JournalState {
     } else if (ev === "LoadGame" || ev === "Fileheader") {
       this.setShip(e.Ship, e.ShipID, e.Ship_Localised);
       this.commander = e.Commander ?? this.commander;
-      // Which game this commander is running, which is exactly the question
-      // the ODYSSEY box asks. Only ever used to seed it.
+      // Which game this commander is running: the ODYSSEY box is seeded from
+      // it, and EDDN records it to keep Live and Legacy data apart.
       if (e.Odyssey != null) this.odyssey = e.Odyssey;
+      if (e.Horizons != null) this.horizons = e.Horizons;
+      this.gameversion = e.gameversion ?? this.gameversion;
+      this.gamebuild = (e.build ?? this.gamebuild ?? "").trim() || null;
     } else if (ev === "Cargo" && e.Count != null) {
       this.cargo = e.Count;
     } else if (ev === "Location") {
