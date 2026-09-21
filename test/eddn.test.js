@@ -287,3 +287,185 @@ test("a network failure is reported, not thrown", async () => {
   assert.equal(r.ok, false);
   assert.match(r.detail, /offline/);
 });
+
+// -- outfitting/2 and shipyard/2 ----------------------------------------------
+
+const fakeOutfitting = (over = {}) => ({
+  timestamp: "2025-01-01T12:00:00Z", event: "Outfitting",
+  MarketID: 3230679808, StationName: "Metz Enterprise", StarSystem: "Ega",
+  Horizons: true,
+  Items: [
+    { id: 1, Name: "hpt_slugshot_gimbal_large", BuyPrice: 1707264 },
+    { id: 2, Name: "int_engine_size3_class5", BuyPrice: 5000 },
+    // The game really does repeat names - 484 entries, 465 distinct in one
+    // real file - and the schema demands uniqueItems.
+    { id: 3, Name: "hpt_slugshot_gimbal_large", BuyPrice: 1707264 },
+    { id: 4, Name: "adder_armour_grade1", BuyPrice: 1000 },
+    { id: 5, Name: "int_planetapproachsuite", BuyPrice: 0 },
+  ],
+  ...over,
+});
+
+const fakeShipyard = (over = {}) => ({
+  timestamp: "2025-01-01T12:00:00Z", event: "Shipyard",
+  MarketID: 128666762, StationName: "Jameson Memorial",
+  StarSystem: "Shinrarta Dezhra", Horizons: true, AllowCobraMkIV: false,
+  PriceList: [
+    { id: 0, ShipType: "sidewinder", ShipPrice: 164384 },
+    { id: 0, ShipType: "anaconda", ShipPrice: 146969451 },
+  ],
+  ...over,
+});
+
+const OUT_KEYS = new Set(["systemName", "stationName", "marketId", "timestamp",
+                          "modules", "horizons", "odyssey"]);
+const SHIP_KEYS = new Set(["systemName", "stationName", "marketId", "timestamp",
+                           "ships", "horizons", "odyssey"]);
+
+const outfit = (d = fakeOutfitting(), over = {}) =>
+  eddn.buildOutfitting(d, { commander: "TestCmdr", odyssey: true,
+                            softwareVersion: "1.0", ...over });
+
+test("module names are spelled the way EDMC spells them", () => {
+  assert.equal(eddn.moduleName("hpt_slugshot_gimbal_large"), "Hpt_slugshot_gimbal_large");
+  assert.equal(eddn.moduleName("int_engine_size3_class5"), "Int_engine_size3_class5");
+  assert.equal(eddn.moduleName("adder_armour_grade1"), "adder_Armour_grade1");
+});
+
+test("outfitting names the right schema and station", () => {
+  const env = outfit();
+  assert.equal(env.$schemaRef, eddn.OUTFITTING_SCHEMA);
+  assert.equal(env.message.systemName, "Ega");
+  assert.equal(env.message.marketId, 3230679808);
+  assert.equal(env.message.horizons, true);
+  assert.equal(env.message.odyssey, true);
+});
+
+test("repeated modules are collapsed, or the schema rejects the lot", () => {
+  const mods = outfit().message.modules;
+  assert.equal(mods.filter((m) => m === "Hpt_slugshot_gimbal_large").length, 1);
+  assert.deepEqual(mods, [...mods].sort());
+});
+
+test("the planet approach suite is not station stock", () => {
+  // Every hull has one, so its presence says nothing. EDMC drops it, and a
+  // list that disagrees with EDMC's for the same station is worse than either.
+  const mods = outfit().message.modules;
+  assert.ok(!mods.some((m) => m.toLowerCase() === eddn.UNIVERSAL_MODULE));
+});
+
+test("every module sent matches the schema pattern", () => {
+  for (const m of outfit().message.modules) assert.match(m, eddn.MODULE_RE);
+});
+
+test("horizons comes off the file, not the commander", () => {
+  // It is the game saying what this station's list was drawn from.
+  assert.equal(outfit(fakeOutfitting({ Horizons: false })).message.horizons, false);
+});
+
+test("outfitting validates", () => {
+  assert.deepEqual(eddn.validateListMessage(outfit(), "modules", OUT_KEYS), []);
+});
+
+test("shipyard lists hulls, sorted and unique", () => {
+  const env = eddn.buildShipyard(fakeShipyard(), { commander: "X" });
+  assert.equal(env.$schemaRef, eddn.SHIPYARD_SCHEMA);
+  assert.deepEqual(env.message.ships, ["anaconda", "sidewinder"]);
+  assert.deepEqual(eddn.validateListMessage(env, "ships", SHIP_KEYS), []);
+});
+
+test("AllowCobraMkIV never reaches the message", () => {
+  // It sits in the file and not in the schema, which sets additionalProperties
+  // false - so it would reject the whole message.
+  const env = eddn.buildShipyard(fakeShipyard(), { commander: "X" });
+  assert.ok(!("AllowCobraMkIV" in env.message));
+});
+
+test("both spellings of the price list are accepted", () => {
+  const d = fakeShipyard();
+  d.Pricelist = d.PriceList;
+  delete d.PriceList;
+  const env = eddn.buildShipyard(d, { commander: "X" });
+  assert.deepEqual(env.message.ships, ["anaconda", "sidewinder"]);
+});
+
+test("an empty list is a failed reading, not an empty station", () => {
+  const env = outfit(fakeOutfitting({ Items: [] }));
+  assert.match(eddn.validateListMessage(env, "modules", OUT_KEYS).join(" "), /no modules/);
+});
+
+test("an undeclared key in a list message is caught here", () => {
+  const env = outfit();
+  env.message.extra = 1;
+  assert.match(eddn.validateListMessage(env, "modules", OUT_KEYS)[0], /undeclared/);
+});
+
+test("a cosmetic that slipped through is caught by the pattern check", () => {
+  const env = outfit();
+  env.message.modules = ["paintjob_cobramkiii_default"];
+  assert.match(eddn.validateListMessage(env, "modules", OUT_KEYS).join(" "), /pattern/);
+});
+
+const sendStation = (sender, kind, data, over = {}) =>
+  sender.maybeSendStation(kind, data, { commander: "TestCmdr", odyssey: true,
+                                        softwareVersion: "1.0", now: NOW, ...over });
+
+test("a station file is sent once", async () => {
+  const { fetchImpl, sent } = fakeUpload();
+  const s = new eddn.Sender();
+  const r = await sendStation(s, "Outfitting", fakeOutfitting(), { fetchImpl });
+  assert.equal(r.ok, true, r.detail);
+  assert.equal(sent[0].body.$schemaRef, eddn.OUTFITTING_SCHEMA);
+  const again = await sendStation(s, "Outfitting", fakeOutfitting(), { fetchImpl });
+  assert.match(again.detail, /already sent/);
+  assert.equal(sent.length, 1);
+});
+
+test("another station's leftover file is not republished as this one", async () => {
+  // Outfitting.json and Shipyard.json persist from the last station that HAD
+  // the service, so one three systems behind the market beside it is normal.
+  const { fetchImpl, sent } = fakeUpload();
+  const s = new eddn.Sender();
+  const r = await sendStation(s, "Shipyard", fakeShipyard(), { fetchImpl, marketId: 999 });
+  assert.equal(r.ok, false);
+  assert.match(r.detail, /another station/);
+  assert.equal(sent.length, 0);
+  assert.equal(s.failed, 0, "not a failure, just not ours");
+});
+
+test("a matching market id goes", async () => {
+  const { fetchImpl, sent } = fakeUpload();
+  const s = new eddn.Sender();
+  const r = await sendStation(s, "Shipyard", fakeShipyard(), { fetchImpl, marketId: 128666762 });
+  assert.equal(r.ok, true, r.detail);
+  assert.equal(sent.length, 1);
+});
+
+test("outfitting and shipyard do not share a dedup key", async () => {
+  // Both files can carry the same MarketID and timestamp.
+  const { fetchImpl, sent } = fakeUpload();
+  const s = new eddn.Sender();
+  const stamp = "2025-01-01T12:00:00Z";
+  await sendStation(s, "Outfitting", fakeOutfitting({ MarketID: 7, timestamp: stamp }), { fetchImpl });
+  await sendStation(s, "Shipyard", fakeShipyard({ MarketID: 7, timestamp: stamp }), { fetchImpl });
+  assert.equal(sent.length, 2);
+});
+
+test("a stale station file is refused", async () => {
+  const { fetchImpl, sent } = fakeUpload();
+  const s = new eddn.Sender();
+  const r = await sendStation(s, "Outfitting",
+    fakeOutfitting({ timestamp: "2025-01-01T09:00:00Z" }), { fetchImpl });
+  assert.equal(r.ok, false);
+  assert.match(r.detail, /over an hour old/);
+  assert.equal(sent.length, 0);
+});
+
+test("nothing invalid reaches the network", async () => {
+  const { fetchImpl, sent } = fakeUpload();
+  const s = new eddn.Sender();
+  const r = await sendStation(s, "Outfitting", fakeOutfitting({ Items: [] }), { fetchImpl });
+  assert.equal(r.ok, false);
+  assert.match(r.detail, /invalid/);
+  assert.equal(sent.length, 0);
+});
